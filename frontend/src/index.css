@@ -1,0 +1,17 @@
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(185, 28, 28, 0.16);
+}

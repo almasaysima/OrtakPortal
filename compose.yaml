@@ -1,0 +1,276 @@
+services:
+  postgres:
+    image: postgres:18
+    container_name: company-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-company_portal}
+    ports:
+      - "5433:5432"
+    volumes:
+      - company-postgres-data:/var/lib/postgresql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-company_portal}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: company-redis
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    container_name: company-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-companyadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - company-minio-data:/data
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  company-ldap:
+    image: osixia/openldap:1.5.0
+    container_name: company-ldap
+    environment:
+      LDAP_ORGANISATION: "Sirket"
+      LDAP_DOMAIN: "sirket.local"
+      LDAP_BASE_DN: "DC=sirket,DC=local"
+      LDAP_ADMIN_PASSWORD: "AdminPassword123!"
+    ports:
+      - "389:389"
+      - "636:636"
+    volumes:
+      - company-ldap-data:/var/lib/ldap
+      - company-ldap-config:/etc/ldap/slapd.d
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: ortakportal-backend
+    container_name: company-backend
+    environment:
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      FLASK_DEBUG: ${FLASK_DEBUG:-false}
+      POSTGRES_HOST: company-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-company_portal}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: company-redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: company-minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-companyadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-company-documents}
+      MAIL_HOST: ${MAIL_HOST:-smtp.gmail.com}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-testsirket0@gmail.com}
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@company.local}
+      LDAP_ENABLED: ${LDAP_ENABLED:-true}
+      LDAP_HOST: ${LDAP_HOST:-company-ldap}
+      LDAP_PORT: ${LDAP_PORT:-389}
+      LDAP_DOMAIN: ${LDAP_DOMAIN:-sirket.local}
+      LDAP_BASE_DN: ${LDAP_BASE_DN:-DC=sirket,DC=local}
+    expose:
+      - "5000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      company-ldap:
+        condition: service_started
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: ortakportal-frontend
+    container_name: company-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  portal-exporter:
+    build:
+      context: ./monitoring/exporter
+    image: ortakportal-health-exporter
+    container_name: company-portal-exporter
+    environment:
+      HEALTH_URL: "http://backend:5000/api/health"
+      PORT: "8000"
+    expose:
+      - "8000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.57.0
+    container_name: company-monitoring-cadvisor
+    ports:
+      - "8080:8080"
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: company-postgres-exporter
+    environment:
+      DATA_SOURCE_URI: "company-postgres:5432/${POSTGRES_DB:-company_portal}?sslmode=disable"
+      DATA_SOURCE_USER: ${POSTGRES_USER:-postgres}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+    expose:
+      - "9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: company-redis-exporter
+    environment:
+      REDIS_ADDR: "redis://company-redis:6379"
+    expose:
+      - "9121"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.5.1
+    container_name: company-nginx-exporter
+    command:
+      - "--nginx.scrape-uri=http://frontend/nginx_status"
+    expose:
+      - "9113"
+    depends_on:
+      - frontend
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: company-monitoring-node-exporter
+    command:
+      - "--path.rootfs=/host"
+    expose:
+      - "9100"
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: company-monitoring-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    depends_on:
+      - portal-exporter
+      - cadvisor
+      - node-exporter
+      - postgres-exporter
+      - redis-exporter
+      - nginx-exporter
+    networks:
+      - company-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    container_name: company-monitoring-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin123}
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: smtp.gmail.com:587
+      GF_SMTP_USER: ${MAIL_USERNAME}
+      GF_SMTP_PASSWORD: ${GMAIL_APP_PASSWORD}
+      GF_SMTP_FROM_ADDRESS: ${MAIL_USERNAME}
+      GF_SMTP_FROM_NAME: OrtakPortal Monitoring
+      GF_SMTP_STARTTLS_POLICY: MandatoryStartTLS
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - company-network
+    restart: unless-stopped
+
+networks:
+  company-network:
+    name: company-network
+
+volumes:
+  company-postgres-data:
+  company-minio-data:
+  prometheus-data:
+  grafana-data:
+  company-ldap-data:
+  company-ldap-config:

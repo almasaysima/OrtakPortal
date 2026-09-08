@@ -1,0 +1,8 @@
+# .env dosyanın sonuna ekleyebilirsin.
+# Gerçek projede varsayılan parolayı değiştir.
+
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=CHANGE_ME_GRAFANA_PASSWORD
+
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=admin123

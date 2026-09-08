@@ -1,0 +1,492 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: OrtakPortal Backend
+    folder: OrtakPortal Alerts
+    interval: 1m
+    rules:
+      - uid: ortakportal-backend-down
+        title: OrtakPortal Backend Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: company_flask_up
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+
+          - refId: B
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: OrtakPortal backend erişilemiyor
+          description: Backend sağlık metriği 1 dakikadır 1 değerinin altında.
+        labels:
+          severity: critical
+
+  - orgId: 1
+    name: PORTAL01 Kaynak
+    folder: OrtakPortal Alerts
+    interval: 1m
+    rules:
+
+      - uid: portal01-cpu-high
+        title: PORTAL01 CPU High
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 100 - (avg(rate(node_cpu_seconds_total{job="node-exporter",mode="idle"}[5m])) * 100)
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 90
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: PORTAL01 CPU kullanımı yüksek
+          description: CPU kullanımı 5 dakikadır %90 üzerinde.
+        labels:
+          severity: warning
+
+      - uid: portal01-ram-high
+        title: PORTAL01 RAM High
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 100 * (1 - (node_memory_MemAvailable_bytes{job="node-exporter"} / node_memory_MemTotal_bytes{job="node-exporter"}))
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 90
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: PORTAL01 RAM kullanımı yüksek
+          description: RAM kullanımı 5 dakikadır %90 üzerinde.
+        labels:
+          severity: warning
+
+      - uid: portal01-disk-high
+        title: PORTAL01 Disk High
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 100 * (1 - (node_filesystem_avail_bytes{job="node-exporter",mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{job="node-exporter",mountpoint="/",fstype!~"tmpfs|overlay"}))
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params:
+                      - 90
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 10m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: PORTAL01 disk kullanımı kritik
+          description: Root disk kullanımı 10 dakikadır %90 üzerinde.
+        labels:
+          severity: critical
+
+
+  - orgId: 1
+    name: Exporter Sağlık
+    folder: OrtakPortal Alerts
+    interval: 10s
+    rules:
+
+      - uid: postgres-exporter-down
+        title: PostgreSQL Exporter Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: up{job="postgres"}
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: PostgreSQL monitoring erişilemiyor
+          description: PostgreSQL exporter 2 dakikadır erişilemiyor.
+        labels:
+          severity: critical
+          service: postgresql
+
+      - uid: redis-exporter-down
+        title: Redis Exporter Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: up{job="redis"}
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: Redis monitoring erişilemiyor
+          description: Redis exporter 2 dakikadır erişilemiyor.
+        labels:
+          severity: critical
+          service: redis
+
+      - uid: nginx-exporter-down
+        title: Nginx Exporter Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: up{job="nginx"}
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: Nginx monitoring erişilemiyor
+          description: Nginx exporter 2 dakikadır erişilemiyor.
+        labels:
+          severity: critical
+          service: nginx
+
+      - uid: cadvisor-down
+        title: cAdvisor Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: up{job="cadvisor"}
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: cAdvisor erişilemiyor
+          description: Container metriklerini sağlayan cAdvisor 2 dakikadır erişilemiyor.
+        labels:
+          severity: warning
+          service: cadvisor
+
+      - uid: node-exporter-down
+        title: Node Exporter Down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: up{job="node-exporter"}
+              instant: true
+              refId: A
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params:
+                      - 1
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              refId: C
+
+        for: 0s
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          summary: PORTAL01 sunucu metrikleri erişilemiyor
+          description: Node Exporter 2 dakikadır erişilemiyor.
+        labels:
+          severity: critical
+          service: portal01

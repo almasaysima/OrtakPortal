@@ -1,0 +1,30 @@
+OrtakPortal Monitoring entegrasyonu
+
+Bu pakette kullanman gereken dosyalar hazırdır.
+
+1) ZIP içeriğini proje ana klasörünün üzerine çıkar.
+   compose.yaml ve nginx/default.conf mevcut dosyaların üzerine yazılacak.
+   monitoring/ klasörü yeni eklenecek.
+
+2) monitoring/ENV_ADD.txt içindeki Grafana değişkenlerini .env dosyana ekle.
+   GRAFANA_ADMIN_PASSWORD değerini kendin belirle.
+
+3) Proje ana klasöründe:
+   docker compose down
+   docker compose up -d --build
+
+4) Kontrol:
+   docker compose ps
+
+5) Adresler:
+   OrtakPortal: http://localhost
+   Grafana:      http://localhost:3000
+   Prometheus:   http://localhost:9090
+   cAdvisor:     http://localhost:8080
+
+Grafana veri kaynağı Prometheus olarak otomatik tanımlanır.
+
+Not:
+- data/metrics.csv gerekli değildir; pakete eklenmedi.
+- Arkadaşının monitoring compose'u kullanılmaz; root compose.yaml içine entegre edildi.
+- Exporter'lar artık host.docker.internal yerine company-network üzerinden konuşur.
