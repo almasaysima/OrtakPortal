@@ -215,3 +215,75 @@ def logout():
     return jsonify({
         "success": True
     }), 200
+
+
+# =========================================================
+# SIFRE DEGISTIRME VE ACTIVE DIRECTORY SENKRONIZASYONU
+# =========================================================
+
+import os
+from ldap3 import Server, Connection, MODIFY_REPLACE, SUBTREE
+from ldap3.utils.conv import escape_filter_chars
+from werkzeug.security import generate_password_hash
+from backend.config import LDAP_HOST, LDAP_PORT, LDAP_DOMAIN, LDAP_BASE_DN
+
+@auth_bp.route('/change-password', methods=['POST'])
+def change_password():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'error': 'Oturum bulunamadi.'}), 401
+
+    data = get_json_body()
+    new_password = str(data.get('new_password', '')).strip()
+
+    if not new_password or len(new_password) < 6:
+        return jsonify({'success': False, 'error': 'Yeni parola en az 6 karakter olmalidir.'}), 400
+
+    username = session.get('username')
+    user_id = session.get('user_id')
+
+    # 1. DC01 (Active Directory) uzerinde sifreyi guncelle
+    ad_updated = False
+    try:
+        server = Server(LDAP_HOST, port=LDAP_PORT, connect_timeout=5)
+        admin_conn = Connection(
+            server,
+            user=f'Administrator@{LDAP_DOMAIN}',
+            password=os.getenv('LDAP_ADMIN_PASSWORD', 'aysima123'),
+            auto_bind=True,
+            receive_timeout=5
+        )
+        if admin_conn.bound:
+            safe_u = escape_filter_chars(username)
+            admin_conn.search(
+                search_base=LDAP_BASE_DN,
+                search_filter=f'(|(sAMAccountName={safe_u})(cn={safe_u}))',
+                search_scope=SUBTREE,
+                attributes=['entryDN']
+            )
+            if admin_conn.entries:
+                user_dn = admin_conn.entries[0].entry_dn
+                unicode_pass = ('\"' + new_password + '\"').encode('utf-16-le')
+                admin_conn.modify(user_dn, {'unicodePwd': [(MODIFY_REPLACE, [unicode_pass])]})
+                ad_updated = admin_conn.result.get('description') == 'success'
+                print(f'AD Sifre Degisikligi ({username}): {admin_conn.result.get("description")}')
+    except Exception as ex:
+        print(f'AD sifre degistirme hatasi: {ex}')
+
+    # 2. PostgreSQL veritabaninda guncelle
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'UPDATE users SET password_hash = %s WHERE id = %s',
+            (generate_password_hash(new_password), user_id)
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    msg = 'Parolaniz basariyla guncellendi!'
+    if ad_updated:
+        msg += ' Windows oturum sifreniz (Active Directory) ile senkronize edildi.'
+
+    return jsonify({'success': True, 'message': msg}), 200
