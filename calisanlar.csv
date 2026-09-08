@@ -1,0 +1,9 @@
+username,first_name,last_name,email,role_group,password
+ahmet.yilmaz,Ahmet,Yilmaz,ahmet.yilmaz@sirket.local,OrtakPortal-GenelAdmin,LdapSifre123!
+elayilmaz,Ela,Yilmaz,elayilmaz@sirket.local,OrtakPortal-IT-Yonetici,LdapSifre123!
+aysimaalmas,Aysima,Almas,aysima@sirket.local,OrtakPortal-IT-Calisan,LdapSifre123!
+caner.aydin,Caner,Aydin,caner.aydin@sirket.local,OrtakPortal-IT-Calisan,LdapSifre123!
+selin.kaya,Selin,Kaya,selin.kaya@sirket.local,OrtakPortal-IK-Yonetici,LdapSifre123!
+mert.ozkan,Mert,Ozkan,mert.ozkan@sirket.local,OrtakPortal-IK-Calisan,LdapSifre123!
+burak.sahin,Burak,Sahin,burak.sahin@sirket.local,OrtakPortal-Finans-Yonetici,LdapSifre123!
+zeynep.yildiz,Zeynep,Yildiz,zeynep.yildiz@sirket.local,OrtakPortal-Finans-Calisan,LdapSifre123!

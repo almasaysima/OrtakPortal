@@ -82,13 +82,13 @@ def authenticate_local_admin(username, password):
     user = get_portal_user(username)
     if not user:
         return None
-    if not user or not check_password_hash(user, password):
+    if not user or not check_password_hash(user[2], password):
         return None
     return {
         "id": user[0],
-        "username": user,
-        "role": str(user),
-        "department": user if user else "Genel",
+        "username": user[1],
+        "role": str(user[3]),
+        "department": user[4] if user[4] else "Genel",
     }
 
 def sync_ad_user(ad_user):

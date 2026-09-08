@@ -107,13 +107,19 @@ def sync_ad_user(ad_user):
 
         manager_id = None
         if ad_user["role"] == "employee" and department_id:
-            cur.execute(
-                "SELECT manager_id FROM departments WHERE id = %s",
-                (department_id,)
-            )
-            mgr_row = cur.fetchone()
-            if mgr_row and mgr_row[0]:
-                manager_id = mgr_row[0]
+            try:
+                cur.execute(
+                    "SELECT manager_id FROM departments WHERE id = %s",
+                    (department_id,)
+                )
+                mgr_row = cur.fetchone()
+                if mgr_row and mgr_row[0]:
+                    manager_id = mgr_row[0]
+            except Exception:
+                manager_id = None
+
+        first_name = ad_user.get("first_name") or ad_user["username"].split(".")[0].capitalize()
+        last_name = ad_user.get("last_name") or (ad_user["username"].split(".").capitalize() if "." in ad_user["username"] else "Personel")
 
         cur.execute(
             "SELECT id FROM users WHERE LOWER(username) = LOWER(%s)",
@@ -126,21 +132,22 @@ def sync_ad_user(ad_user):
             cur.execute(
                 '''
                 UPDATE users
-                SET email = %s, role = %s, department_id = COALESCE(%s, department_id),
+                SET email = %s, first_name = COALESCE(%s, first_name), last_name = COALESCE(%s, last_name),
+                    role = %s, department_id = COALESCE(%s, department_id),
                     manager_id = COALESCE(%s, manager_id)
                 WHERE id = %s
                 ''',
-                (ad_user["email"], ad_user["role"], department_id, manager_id, user_id)
+                (ad_user["email"], first_name, last_name, ad_user["role"], department_id, manager_id, user_id)
             )
         else:
             dummy_hash = generate_password_hash(secrets.token_hex(16))
             cur.execute(
                 '''
-                INSERT INTO users (username, email, password_hash, role, department_id, manager_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO users (username, email, password_hash, first_name, last_name, role, department_id, manager_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 ''',
-                (ad_user["username"], ad_user["email"], dummy_hash, ad_user["role"], department_id, manager_id)
+                (ad_user["username"], ad_user["email"], dummy_hash, first_name, last_name, ad_user["role"], department_id, manager_id)
             )
             user_id = cur.fetchone()[0]
 
@@ -164,7 +171,6 @@ def authenticate_ldap(username, password):
 
     server = Server(LDAP_HOST, port=LDAP_PORT, connect_timeout=5)
 
-    # 1. Admin / Servis Hesabi ile Baglanti
     admin_candidates = [
         ("cn=admin,dc=sirket,dc=local", "AdminPassword123!"),
         (f"admin@{LDAP_DOMAIN}", "AdminPassword123!"),
@@ -186,7 +192,7 @@ def authenticate_ldap(username, password):
         safe_username = escape_filter_chars(username)
         entry = None
 
-        # 2. Kullaniciyi Ara (Once OpenLDAP cn/uid formatinda dene)
+        # 1. Once OpenLDAP cn/uid ile ara
         try:
             admin_conn.search(
                 search_base=LDAP_BASE_DN,
@@ -199,7 +205,7 @@ def authenticate_ldap(username, password):
         except Exception:
             entry = None
 
-        # Eger bulunamadiysa Active Directory (sAMAccountName) ile ara
+        # 2. Bulunamazsa Active Directory (sAMAccountName) ile ara
         if not entry:
             try:
                 admin_conn.search(
@@ -218,7 +224,7 @@ def authenticate_ldap(username, password):
 
         user_dn = entry.entry_dn
 
-        # 3. Kullanicinin Parolasini Dogrula (User Bind)
+        # 3. Kullanici parolasini dogrula (User Bind)
         try:
             user_conn = Connection(server, user=user_dn, password=password, auto_bind=True, receive_timeout=5)
             if not user_conn.bound:
@@ -226,8 +232,9 @@ def authenticate_ldap(username, password):
         except Exception:
             return None
 
-        # 4. Grup Uyeligini Al
         attributes = entry.entry_attributes_as_dict
+
+        # 4. Grup uyeliklerini al
         member_of = attributes.get("memberOf", [])
         if not member_of:
             try:
