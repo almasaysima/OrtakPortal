@@ -55,6 +55,9 @@ def set_dc01_ad_password(username, new_password):
         print(f"DC01 Sifre Guncelleme Hatasi: {ex}")
     return False
 
+def trigger_user_lock(username):
+    LOCK_SIGNALS[username] = True
+
 @auth_bp.route("/check-lock", methods=["GET"])
 def check_lock():
     username = request.args.get("username", "")
@@ -91,8 +94,8 @@ def change_password():
     finally:
         conn.close()
 
-    # 3. Bilgisayari kilitlemesi icin CLIENT01'e sinyal gonder
-    LOCK_SIGNALS[username] = True
+    # 3. Bilgisayari otomatik kilitlemek icin sinyal ver
+    trigger_user_lock(username)
 
     return jsonify({
         "success": True,
