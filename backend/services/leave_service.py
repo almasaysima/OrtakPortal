@@ -1,10 +1,77 @@
+import os
+import smtplib
+from email.mime.text import MIMEText
+
 # PostgreSQL bağlantısını merkezi database katmanından alıyoruz.
 from backend.database.connection import get_db_connection
 
 
 # =========================================================
+# E-POSTA BILDIRIM YARDIMCISI (SIRKET MAILI ILE GONDERIM)
+# =========================================================
+
+def send_leave_notification_email(leave_id, status_text, note=""):
+  try:
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+            SELECT u.email, u.first_name, u.last_name, lr.start_date, lr.end_date, lr.reason
+            FROM leave_requests lr
+            JOIN users u ON lr.user_id = u.id
+            WHERE lr.id = %s
+        """,
+        (leave_id,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not row or not row[0]:
+      return
+
+    to_email, first_name, last_name, start_date, end_date, reason = row
+
+    mail_user = os.getenv("MAIL_USERNAME", "testsirket0@gmail.com")
+    mail_pass = os.getenv("GMAIL_APP_PASSWORD", "")
+    mail_host = os.getenv("MAIL_HOST", "smtp.gmail.com")
+    mail_port = int(os.getenv("MAIL_PORT", "587"))
+
+    if not mail_user or not mail_pass:
+      print("Mail kullanici adi veya sifresi tanimli degil.")
+      return
+
+    subject = f"İzin Talebi Durumu: {status_text.upper()}"
+    body = f"""Sayın {first_name} {last_name},
+
+{start_date} - {end_date} tarihleri arasındaki izin talebiniz şirket yönetimi tarafından {status_text.upper()}.
+
+İzin Gerekçeniz: {reason}
+Yönetici Notu: {note if note else '-'}
+
+Bilgilerinize sunarız.
+OrtakPortal Şirket Yönetimi
+"""
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = f"OrtakPortal Şirket Yönetimi <{mail_user}>"
+    msg["To"] = to_email
+
+    s = smtplib.SMTP(mail_host, mail_port, timeout=10)
+    s.starttls()
+    s.login(mail_user, mail_pass)
+    s.sendmail(mail_user, [to_email], msg.as_string())
+    s.quit()
+    print(f"İzin bildirim maili gönderildi: {to_email} ({status_text})")
+  except Exception as e:
+    print(f"İzin mail gönderme hatası: {e}")
+
+
+# =========================================================
 # İZİN TALEBİ OLUŞTUR
 # =========================================================
+
 
 def create_leave_request(
     user_id,
@@ -12,69 +79,35 @@ def create_leave_request(
     end_date,
     reason,
     attachment_name=None,
-    attachment_object_name=None
+    attachment_object_name=None,
 ):
-    """
-    Çalışan adına yeni bir izin talebi oluşturur.
+  conn = get_db_connection()
+  try:
+    cur = conn.cursor()
 
-    Business logic bu katmanda bulunur.
-    Route katmanı yalnızca HTTP isteğini yönetir.
-    """
-
-    # PostgreSQL bağlantısı oluşturuyoruz.
-    conn = get_db_connection()
-
-    try:
-
-        # SQL sorgularını çalıştırmak için cursor oluşturuyoruz.
-        cur = conn.cursor()
-
-        # -------------------------------------------------
-        # ÇALIŞANIN YÖNETİCİSİNİ BUL
-        # -------------------------------------------------
-
-        # İzin talebinde yöneticiyi frontend'den almıyoruz.
-        # Sistem kullanıcının manager_id alanından yöneticiyi
-        # otomatik olarak belirliyor.
-        cur.execute("""
-            SELECT
-                manager_id
+    cur.execute(
+        """
+            SELECT manager_id
             FROM users
             WHERE id = %s
-        """, (
-            user_id,
-        ))
+        """,
+        (user_id,),
+    )
+    user = cur.fetchone()
 
-        user = cur.fetchone()
+    if not user:
+      return {"success": False, "error": "Çalışan bulunamadı."}
 
-        # Kullanıcı bulunamadıysa izin oluşturamayız.
-        if not user:
+    manager_id = user[0]
 
-            return {
-                "success": False,
-                "error": "Çalışan bulunamadı."
-            }
+    if manager_id is None:
+      return {
+          "success": False,
+          "error": "Bu çalışan için yönetici tanımlanmamış.",
+      }
 
-        manager_id = user[0]
-
-        # Çalışanın yöneticisi tanımlı değilse
-        # yönetici onay sürecini başlatamayız.
-        if manager_id is None:
-
-            return {
-                "success": False,
-                "error": (
-                    "Bu çalışan için yönetici "
-                    "tanımlanmamış."
-                )
-            }
-
-        # -------------------------------------------------
-        # İZİN TALEBİNİ OLUŞTUR
-        # -------------------------------------------------
-
-        # İlk aşamada izin talebi yöneticinin onayını bekliyor.
-        cur.execute("""
+    cur.execute(
+        """
             INSERT INTO leave_requests
             (
                 user_id,
@@ -88,77 +121,49 @@ def create_leave_request(
             )
             VALUES
             (
-                %s,
-                %s,
-                %s,
-                %s,
-                'pending',
-                'manager_pending',
-                %s,
-                %s
+                %s, %s, %s, %s, 'pending', 'manager_pending', %s, %s
             )
             RETURNING id
-        """, (
+        """,
+        (
             user_id,
             start_date,
             end_date,
             reason,
             attachment_name,
-            attachment_object_name
-        ))
+            attachment_object_name,
+        ),
+    )
 
-        # Oluşturulan izin kaydının ID'sini alıyoruz.
-        leave_id = cur.fetchone()[0]
+    leave_id = cur.fetchone()[0]
+    conn.commit()
 
-        # Transaction'ı onaylıyoruz.
-        conn.commit()
+    return {
+        "success": True,
+        "leave_id": leave_id,
+        "manager_id": manager_id,
+        "approval_stage": "manager_pending",
+    }
 
-        return {
-            "success": True,
-            "leave_id": leave_id,
-            "manager_id": manager_id,
-            "approval_stage": "manager_pending"
-        }
-
-    except Exception:
-
-        # Hata oluşursa yapılan veritabanı değişikliklerini
-        # geri alıyoruz.
-        conn.rollback()
-
-        raise
-
-    finally:
-
-        # Cursor ve database bağlantısını kapatıyoruz.
-        cur.close()
-        conn.close()
+  except Exception:
+    conn.rollback()
+    raise
+  finally:
+    cur.close()
+    conn.close()
 
 
 # =========================================================
 # KENDİ İZİNLERİNİ GETİR
 # =========================================================
 
+
 def get_my_leave_requests(user_id):
-    """
-    Giriş yapan çalışanın kendi izin taleplerini getirir.
-
-    user_id session üzerinden gelir.
-    Böylece kullanıcı başka bir çalışanın ID'sini
-    göndererek başka kişinin izinlerini göremez.
-    """
-
-    # PostgreSQL bağlantısı oluşturuyoruz.
-    conn = get_db_connection()
-
-    try:
-
-        # SQL sorgularını çalıştırmak için cursor oluşturuyoruz.
-        cur = conn.cursor()
-
-        # Sadece giriş yapan çalışanın izinlerini getiriyoruz.
-        # Yönetici bilgilerini de sorguya dahil ediyoruz.
-        cur.execute("""
+  conn = get_db_connection()
+  try:
+    cur = conn.cursor()
+    cur.execute(
+        """
             SELECT
                 lr.id,
                 lr.start_date,
@@ -178,52 +183,27 @@ def get_my_leave_requests(user_id):
                 ON lr.manager_reviewed_by = m.id
             WHERE lr.user_id = %s
             ORDER BY lr.created_at DESC
-        """, (
-            user_id,
-        ))
+        """,
+        (user_id,),
+    )
+    requests = cur.fetchall()
+    cur.close()
+    return requests
+  finally:
+    conn.close()
 
-        # Sorgudan dönen kayıtları alıyoruz.
-        requests = cur.fetchall()
 
-        # Cursor'ı kapatıyoruz.
-        cur.close()
-
-        return requests
-
-    finally:
-
-        # Hata olsa bile database bağlantısını kapatıyoruz.
-        conn.close()
-       
 # =========================================================
 # İZİN ONAYLA
 # =========================================================
 
-def approve_leave_request(
-    request_id,
-    reviewer_id,
-    note=""
-):
-    """
-    Bir izin talebini mevcut onay aşamasına göre onaylar.
 
-    manager_pending aşamasında:
-        Sadece çalışanın yöneticisi onaylayabilir.
-        Sonraki aşama hr_pending olur.
-
-    hr_pending aşamasında:
-        Sadece İK onaylayabilir.
-        Sonraki durum approved olur.
-    """
-
-    conn = get_db_connection()
-
-    try:
-
-        cur = conn.cursor()
-
-        # İzin talebini ve çalışanın yöneticisini getiriyoruz.
-        cur.execute("""
+def approve_leave_request(request_id, reviewer_id, note=""):
+  conn = get_db_connection()
+  try:
+    cur = conn.cursor()
+    cur.execute(
+        """
             SELECT
                 lr.user_id,
                 lr.approval_stage,
@@ -232,44 +212,28 @@ def approve_leave_request(
             INNER JOIN users u
                 ON lr.user_id = u.id
             WHERE lr.id = %s
-        """, (
-            request_id,
-        ))
+        """,
+        (request_id,),
+    )
+    leave = cur.fetchone()
 
-        leave = cur.fetchone()
+    if not leave:
+      return {"success": False, "error": "İzin talebi bulunamadı."}
 
-        if not leave:
+    user_id = leave[0]
+    approval_stage = leave
+    manager_id = leave
 
-            return {
-                "success": False,
-                "error": "İzin talebi bulunamadı."
-            }
+    # 1. Aşama: Yönetici Onayı
+    if approval_stage == "manager_pending":
+      if manager_id != reviewer_id:
+        return {
+            "success": False,
+            "error": "Bu izin talebini onaylama yetkiniz yok.",
+        }
 
-        user_id = leave[0]
-        approval_stage = leave[1]
-        manager_id = leave[2]
-
-        # -------------------------------------------------
-        # YÖNETİCİ ONAYI
-        # -------------------------------------------------
-
-        if approval_stage == "manager_pending":
-
-            # Talebi onaylayan kişinin,
-            # çalışanın kayıtlı yöneticisi olması gerekiyor.
-            if manager_id != reviewer_id:
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Bu izin talebini onaylama "
-                        "yetkiniz yok."
-                    )
-                }
-
-            # Yönetici onayladıktan sonra
-            # talep İK'nın önüne geçiyor.
-            cur.execute("""
+      cur.execute(
+          """
                 UPDATE leave_requests
                 SET
                     approval_stage = 'hr_pending',
@@ -277,61 +241,45 @@ def approve_leave_request(
                     manager_reviewed_at = CURRENT_TIMESTAMP,
                     manager_note = %s
                 WHERE id = %s
-            """, (
-                reviewer_id,
-                note,
-                request_id
-            ))
+            """,
+          (reviewer_id, note, request_id),
+      )
+      conn.commit()
 
-            conn.commit()
+      # E-posta bildirimi gönder (Yönetici onayladı, İK onayı bekliyor)
+      send_leave_notification_email(
+          request_id, "Yöneticiniz Tarafından Onaylandı (İK Onayı Bekliyor)", note
+      )
 
-            return {
-                "success": True,
-                "approval_stage": "hr_pending"
-            }
+      return {"success": True, "approval_stage": "hr_pending"}
 
-        # -------------------------------------------------
-        # İK ONAYI
-        # -------------------------------------------------
-
-        if approval_stage == "hr_pending":
-
-            # İK kontrolünü rol üzerinden yapıyoruz.
-            cur.execute("""
-                SELECT
-                    role
+    # 2. Aşama: İK Onayı
+    if approval_stage == "hr_pending":
+      cur.execute(
+          """
+                SELECT role
                 FROM users
                 WHERE id = %s
-            """, (
-                reviewer_id,
-            ))
+            """,
+          (reviewer_id,),
+      )
+      reviewer = cur.fetchone()
 
-            reviewer = cur.fetchone()
+      if not reviewer:
+        return {
+            "success": False,
+            "error": "Onaylayan kullanıcı bulunamadı.",
+        }
 
-            if not reviewer:
+      reviewer_role = reviewer[0]
+      if reviewer_role not in ("hr_admin", "admin"):
+        return {
+            "success": False,
+            "error": "Bu izin talebini İK olarak onaylama yetkiniz yok.",
+        }
 
-                return {
-                    "success": False,
-                    "error": "Onaylayan kullanıcı bulunamadı."
-                }
-
-            reviewer_role = reviewer[0]
-
-            if reviewer_role not in (
-                "hr_admin",
-                "admin"
-            ):
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Bu izin talebini İK olarak "
-                        "onaylama yetkiniz yok."
-                    )
-                }
-
-            # İK onayından sonra izin tamamlanıyor.
-            cur.execute("""
+      cur.execute(
+          """
                 UPDATE leave_requests
                 SET
                     status = 'approved',
@@ -340,61 +288,44 @@ def approve_leave_request(
                     hr_reviewed_at = CURRENT_TIMESTAMP,
                     hr_note = %s
                 WHERE id = %s
-            """, (
-                reviewer_id,
-                note,
-                request_id
-            ))
+            """,
+          (reviewer_id, note, request_id),
+      )
+      conn.commit()
 
-            conn.commit()
+      # E-posta bildirimi gönder (Tamamen ONAYLANDI)
+      send_leave_notification_email(request_id, "ONAYLANDI", note)
 
-            return {
-                "success": True,
-                "approval_stage": "completed",
-                "status": "approved"
-            }
+      return {
+          "success": True,
+          "approval_stage": "completed",
+          "status": "approved",
+      }
 
-        return {
-            "success": False,
-            "error": "Bu izin talebi onaylanabilir durumda değil."
-        }
+    return {
+        "success": False,
+        "error": "Bu izin talebi onaylanabilir durumda değil.",
+    }
 
-    except Exception:
-
-        conn.rollback()
-
-        raise
-
-    finally:
-
-        cur.close()
-        conn.close()
+  except Exception:
+    conn.rollback()
+    raise
+  finally:
+    cur.close()
+    conn.close()
 
 
 # =========================================================
 # İZİN REDDET
 # =========================================================
 
-def reject_leave_request(
-    request_id,
-    reviewer_id,
-    note=""
-):
-    """
-    İzin talebini mevcut onay aşamasına göre reddeder.
 
-    Hem yönetici hem İK aşamasında çalışabilir.
-    """
-
-    conn = get_db_connection()
-
-    try:
-
-        cur = conn.cursor()
-
-        # İzin talebinin mevcut aşamasını ve
-        # çalışanın yöneticisini buluyoruz.
-        cur.execute("""
+def reject_leave_request(request_id, reviewer_id, note=""):
+  conn = get_db_connection()
+  try:
+    cur = conn.cursor()
+    cur.execute(
+        """
             SELECT
                 lr.approval_stage,
                 u.manager_id
@@ -402,39 +333,27 @@ def reject_leave_request(
             INNER JOIN users u
                 ON lr.user_id = u.id
             WHERE lr.id = %s
-        """, (
-            request_id,
-        ))
+        """,
+        (request_id,),
+    )
+    leave = cur.fetchone()
 
-        leave = cur.fetchone()
+    if not leave:
+      return {"success": False, "error": "İzin talebi bulunamadı."}
 
-        if not leave:
+    approval_stage = leave[0]
+    manager_id = leave
 
-            return {
-                "success": False,
-                "error": "İzin talebi bulunamadı."
-            }
+    # Yönetici Reddi
+    if approval_stage == "manager_pending":
+      if manager_id != reviewer_id:
+        return {
+            "success": False,
+            "error": "Bu izin talebini reddetme yetkiniz yok.",
+        }
 
-        approval_stage = leave[0]
-        manager_id = leave[1]
-
-        # -------------------------------------------------
-        # YÖNETİCİ REDDİ
-        # -------------------------------------------------
-
-        if approval_stage == "manager_pending":
-
-            if manager_id != reviewer_id:
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Bu izin talebini reddetme "
-                        "yetkiniz yok."
-                    )
-                }
-
-            cur.execute("""
+      cur.execute(
+          """
                 UPDATE leave_requests
                 SET
                     status = 'rejected',
@@ -443,58 +362,48 @@ def reject_leave_request(
                     manager_reviewed_at = CURRENT_TIMESTAMP,
                     manager_note = %s
                 WHERE id = %s
-            """, (
-                reviewer_id,
-                note,
-                request_id
-            ))
+            """,
+          (reviewer_id, note, request_id),
+      )
+      conn.commit()
 
-            conn.commit()
+      # E-posta bildirimi gönder (Yönetici reddetti)
+      send_leave_notification_email(
+          request_id, "Yöneticiniz Tarafından REDDEDİLDİ", note
+      )
 
-            return {
-                "success": True,
-                "status": "rejected",
-                "approval_stage": "rejected"
-            }
+      return {
+          "success": True,
+          "status": "rejected",
+          "approval_stage": "rejected",
+      }
 
-        # -------------------------------------------------
-        # İK REDDİ
-        # -------------------------------------------------
-
-        if approval_stage == "hr_pending":
-
-            cur.execute("""
-                SELECT
-                    role
+    # İK Reddi
+    if approval_stage == "hr_pending":
+      cur.execute(
+          """
+                SELECT role
                 FROM users
                 WHERE id = %s
-            """, (
-                reviewer_id,
-            ))
+            """,
+          (reviewer_id,),
+      )
+      reviewer = cur.fetchone()
 
-            reviewer = cur.fetchone()
+      if not reviewer:
+        return {
+            "success": False,
+            "error": "Onaylayan kullanıcı bulunamadı.",
+        }
 
-            if not reviewer:
+      if reviewer[0] not in ("hr_admin", "admin"):
+        return {
+            "success": False,
+            "error": "Bu izin talebini İK olarak reddetme yetkiniz yok.",
+        }
 
-                return {
-                    "success": False,
-                    "error": "Onaylayan kullanıcı bulunamadı."
-                }
-
-            if reviewer[0] not in (
-                "hr_admin",
-                "admin"
-            ):
-
-                return {
-                    "success": False,
-                    "error": (
-                        "Bu izin talebini İK olarak "
-                        "reddetme yetkiniz yok."
-                    )
-                }
-
-            cur.execute("""
+      cur.execute(
+          """
                 UPDATE leave_requests
                 SET
                     status = 'rejected',
@@ -503,93 +412,66 @@ def reject_leave_request(
                     hr_reviewed_at = CURRENT_TIMESTAMP,
                     hr_note = %s
                 WHERE id = %s
-            """, (
-                reviewer_id,
-                note,
-                request_id
-            ))
+            """,
+          (reviewer_id, note, request_id),
+      )
+      conn.commit()
 
-            conn.commit()
+      # E-posta bildirimi gönder (İK reddetti)
+      send_leave_notification_email(
+          request_id, "İK Tarafından REDDEDİLDİ", note
+      )
 
-            return {
-                "success": True,
-                "status": "rejected",
-                "approval_stage": "rejected"
-            }
+      return {
+          "success": True,
+          "status": "rejected",
+          "approval_stage": "rejected",
+      }
 
-        return {
-            "success": False,
-            "error": "Bu izin talebi reddedilebilir durumda değil."
-        }
+    return {
+        "success": False,
+        "error": "Bu izin talebi reddedilebilir durumda değil.",
+    }
 
-    except Exception:
+  except Exception:
+    conn.rollback()
+    raise
+  finally:
+    cur.close()
+    conn.close()
 
-        conn.rollback()
-
-        raise
-
-    finally:
-
-        cur.close()
-        conn.close()
 
 # =========================================================
 # BEKLEYEN İZİNLERİ GETİR
 # =========================================================
 
+
 def get_pending_leave_requests(reviewer_id):
-    """
-    Giriş yapan kullanıcının onaylayabileceği
-    bekleyen izin taleplerini getirir.
-
-    Yönetici:
-        Kendi çalışanlarının manager_pending izinlerini görür.
-
-    HR:
-        hr_pending izinlerini görür.
-
-    Admin:
-        Hem kendi çalışanlarının manager_pending izinlerini
-        hem de hr_pending izinlerini görür.
-    """
-
-    conn = get_db_connection()
-    cur = None
-
-    try:
-        cur = conn.cursor()
-
-        # -------------------------------------------------
-        # KULLANICININ ROLÜNÜ BUL
-        # -------------------------------------------------
-
-        cur.execute("""
+  conn = get_db_connection()
+  cur = None
+  try:
+    cur = conn.cursor()
+    cur.execute(
+        """
             SELECT role
             FROM users
             WHERE id = %s
-        """, (
-            reviewer_id,
-        ))
+        """,
+        (reviewer_id,),
+    )
+    reviewer = cur.fetchone()
 
-        reviewer = cur.fetchone()
+    if not reviewer:
+      return {"success": False, "error": "Kullanıcı bulunamadı."}
 
-        if not reviewer:
-            return {
-                "success": False,
-                "error": "Kullanıcı bulunamadı."
-            }
+    reviewer_role = reviewer[0]
 
-        reviewer_role = reviewer[0]
-
-        # -------------------------------------------------
-        # ADMIN
-        # -------------------------------------------------
-
-        if reviewer_role == "admin":
-            cur.execute("""
+    if reviewer_role == "admin":
+      cur.execute(
+          """
                 SELECT
                     lr.id,
-                    u.id,
+                    lr.user_id,
                     u.first_name,
                     u.last_name,
                     d.name AS department,
@@ -612,19 +494,14 @@ def get_pending_leave_requests(reviewer_id):
                     OR
                     lr.approval_stage = 'hr_pending'
                 ORDER BY lr.created_at ASC
-            """, (
-                reviewer_id,
-            ))
-
-        # -------------------------------------------------
-        # HR
-        # -------------------------------------------------
-
-        elif reviewer_role == "hr_admin":
-            cur.execute("""
+            """,
+          (reviewer_id,),
+      )
+    elif reviewer_role == "hr_admin":
+      cur.execute("""
                 SELECT
                     lr.id,
-                    u.id,
+                    lr.user_id,
                     u.first_name,
                     u.last_name,
                     d.name AS department,
@@ -643,16 +520,12 @@ def get_pending_leave_requests(reviewer_id):
                     lr.approval_stage = 'hr_pending'
                 ORDER BY lr.created_at ASC
             """)
-
-        # -------------------------------------------------
-        # NORMAL YÖNETİCİ
-        # -------------------------------------------------
-
-        else:
-            cur.execute("""
+    else:
+      cur.execute(
+          """
                 SELECT
                     lr.id,
-                    u.id,
+                    lr.user_id,
                     u.first_name,
                     u.last_name,
                     d.name AS department,
@@ -671,34 +544,28 @@ def get_pending_leave_requests(reviewer_id):
                     lr.approval_stage = 'manager_pending'
                     AND u.manager_id = %s
                 ORDER BY lr.created_at ASC
-            """, (
-                reviewer_id,
-            ))
+            """,
+          (reviewer_id,),
+      )
 
-        requests = cur.fetchall()
+    requests = cur.fetchall()
+    return {"success": True, "requests": requests}
+  finally:
+    if cur:
+      cur.close()
+    conn.close()
 
-        return {
-            "success": True,
-            "requests": requests
-        }
-
-    finally:
-        if cur:
-            cur.close()
-
-        conn.close()
 
 # =========================================================
 # ADMIN / İK İÇİN TÜM İZİN TALEPLERİ
 # =========================================================
 
+
 def get_all_leave_requests():
-    conn = get_db_connection()
-
-    try:
-        cur = conn.cursor()
-
-        cur.execute("""
+  conn = get_db_connection()
+  try:
+    cur = conn.cursor()
+    cur.execute("""
             SELECT
                 lr.id,
                 lr.user_id,
@@ -727,11 +594,8 @@ def get_all_leave_requests():
                 END,
                 lr.created_at DESC
         """)
-
-        rows = cur.fetchall()
-        cur.close()
-
-        return rows
-
-    finally:
-        conn.close()
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+  finally:
+    conn.close()
