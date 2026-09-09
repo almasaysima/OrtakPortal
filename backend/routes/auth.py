@@ -1,11 +1,12 @@
 import os
+import ssl
 from flask import (
     Blueprint,
     request,
     jsonify,
     session,
 )
-from ldap3 import Server, Connection, MODIFY_REPLACE
+from ldap3 import Server, Connection, Tls, MODIFY_REPLACE
 from ldap3.utils.conv import escape_filter_chars
 from werkzeug.security import generate_password_hash
 
@@ -18,9 +19,12 @@ from backend.config import LDAP_DOMAIN
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
+LOCK_SIGNALS = {}
+
 def set_dc01_password(username, new_password):
     try:
-        s = Server("192.168.10.10", port=389, connect_timeout=5)
+        tls_config = Tls(validate=ssl.CERT_NONE)
+        s = Server("192.168.10.10", port=636, use_ssl=True, tls=tls_config, connect_timeout=5)
         c = None
         for pw in ["ays'ma123", "aysima123", "Aysima123!"]:
             try:
@@ -31,17 +35,26 @@ def set_dc01_password(username, new_password):
             except Exception:
                 continue
         if not c:
+            print("DC01 LDAPS baglanamadi!")
             return False
+
         safe_u = escape_filter_chars(username)
         c.search("DC=sirket,DC=local", f"(sAMAccountName={safe_u})", attributes=["distinguishedName"])
         if c.entries:
             dn = c.entries[0].entry_dn
             unicode_pwd = ('"' + new_password + '"').encode("utf-16-le")
             c.modify(dn, {"unicodePwd": [(MODIFY_REPLACE, [unicode_pwd])]})
+            print(f"DC01 Sifresi Degisti ({username}): {c.result.get('description')}")
             return c.result.get("description") == "success"
-    except Exception:
-        pass
+    except Exception as ex:
+        print(f"DC01 Sifre Hatasi: {ex}")
     return False
+
+@auth_bp.route("/check-lock", methods=["GET"])
+def check_lock():
+    username = request.args.get("username", "")
+    should_lock = LOCK_SIGNALS.pop(username, False)
+    return jsonify({"lock": should_lock})
 
 @auth_bp.route("/change-password", methods=["POST"])
 def change_password():
@@ -57,7 +70,7 @@ def change_password():
     username = session.get("username")
     user_id = session.get("user_id")
 
-    # 1. DC01 Active Directory uzerinde sifreyi guncelle
+    # 1. DC01 uzerinde Active Directory sifresini (Port 636 LDAPS) guncelle
     set_dc01_password(username, new_password)
 
     # 2. PostgreSQL veritabaninda guncelle
@@ -73,9 +86,12 @@ def change_password():
     finally:
         conn.close()
 
+    # 3. CLIENT01 bilgisayarini otomatik kilitlemesi icin sinyal ver
+    LOCK_SIGNALS[username] = True
+
     return jsonify({
         "success": True,
-        "message": "Parolaniz basariyla guncellendi! Windows sifreniz de degisti."
+        "message": "Parolaniz basariyla guncellendi! Windows oturumunuz kilitleniyor..."
     }), 200
 
 @auth_bp.route("/login", methods=["POST"])
